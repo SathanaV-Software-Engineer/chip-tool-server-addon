@@ -392,7 +392,7 @@ async def run_chiptool_command_via_server(endpoint: str, payload: dict) -> dict:
 
     except aiohttp.ClientError as e:
         raise HTTPException(
-            status_code=500, detail=f"Network error connecting to chip-tool server: {e}")
+            status_code=500, detail=f"Network error connecting to chip-tool server at {chip_tool_url}: {e}. Please ensure the chip-tool server addon is running.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 

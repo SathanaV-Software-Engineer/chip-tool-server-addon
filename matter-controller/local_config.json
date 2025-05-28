@@ -1,0 +1,10 @@
+{
+  "log_level": "debug",
+  "token_lifetime_days": 30,
+  "allow_external_commissioning": true,
+  "analytics_enabled": true,
+  "max_log_entries": 1000,
+  "max_analytics_events": 1000,
+  "auto_register_with_ha": false,
+  "chip_tool_server_url": "http://localhost:5000"
+}

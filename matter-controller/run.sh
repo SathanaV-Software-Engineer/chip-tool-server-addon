@@ -282,6 +282,22 @@ async def get_hub_info(user: Dict = Depends(get_current_user)):
         "status": "online",
         "device_count": 0
     }
+
+# Add pair endpoint that returns a helpful error
+class PairRequest(BaseModel):
+    node_id: int
+    code: str
+
+@app.post("/pair")
+async def pair_device(request: PairRequest):
+    """Pair endpoint that explains the chip-tool server requirement."""
+    return {
+        "error": "Chip-tool server not available",
+        "message": "This endpoint requires the chip-tool server addon to be running on port 5000",
+        "suggestion": "Please install and start the chip-tool-server addon first",
+        "chip_tool_server_url": "http://localhost:5000",
+        "status": "error"
+    }
 EOF
 
 # Try to start the main API first, if it fails, use the simple API
