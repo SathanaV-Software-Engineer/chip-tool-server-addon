@@ -1,0 +1,9 @@
+name: Matter API Server
+version: "1.0"
+slug: matter-api
+description: API wrapper to send chip-tool commands via HTTP
+startup: services
+boot: auto
+host_network: true
+options: {}
+schema: {}
