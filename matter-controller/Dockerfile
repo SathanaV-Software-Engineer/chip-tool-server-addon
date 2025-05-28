@@ -1,7 +1,7 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
-# Install dependencies
+# Install dependencies including build tools for chip-tool
 RUN apk add --no-cache \
     python3 \
     py3-pip \
@@ -12,13 +12,33 @@ RUN apk add --no-cache \
     py3-cryptography \
     py3-yaml \
     jq \
-    curl
+    curl \
+    git \
+    cmake \
+    ninja \
+    make \
+    g++ \
+    glib-dev \
+    openssl-dev \
+    avahi-dev \
+    bluez-dev \
+    linux-headers \
+    pkgconfig
 
 # Install Python packages
 RUN pip3 install --no-cache-dir \
     fastapi \
     uvicorn \
     PyJWT
+
+# Install chip-tool (Matter/Thread CLI tool)
+RUN git clone --recurse-submodules https://github.com/project-chip/connectedhomeip.git /tmp/connectedhomeip && \
+    cd /tmp/connectedhomeip && \
+    ./scripts/checkout_submodules.py --allow-changing-global-git-config --shallow --platform linux && \
+    ./scripts/build/build_examples.py --target linux-x64-chip-tool build && \
+    cp out/linux-x64-chip-tool/chip-tool /usr/local/bin/ && \
+    chmod +x /usr/local/bin/chip-tool && \
+    rm -rf /tmp/connectedhomeip
 
 # Copy files
 COPY rootfs/matter_controller /matter_controller

@@ -5,6 +5,11 @@ bashio::log.info "Starting Schnell Matter Controller"
 
 # Get configuration
 LOG_LEVEL=$(bashio::config 'log_level')
+CHIP_TOOL_SERVER_URL=$(bashio::config 'chip_tool_server_url')
+
+# Export environment variables
+export LOG_LEVEL
+export CHIP_TOOL_SERVER_URL
 
 # Run the debug script to help diagnose installation issues
 bashio::log.info "Running debug script..."

@@ -1,6 +1,7 @@
 """
 Matter Controller API implementation.
 """
+from controller import MatterController
 import os
 import logging
 import time
@@ -15,12 +16,12 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import jwt as jwt
 import subprocess
+import aiohttp
 # Import the controller directly instead of using relative import
 import sys
 import os
 # Add the current directory to the path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from controller import MatterController
 
 # Configure logging
 logging.basicConfig(
@@ -70,31 +71,39 @@ ws_connections = {
 }
 
 # Models
+
+
 class TokenRequest(BaseModel):
     client_id: str
     client_name: str
+
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     expires_at: int
 
+
 class CommissionRequest(BaseModel):
     setup_code: str
     device_name: Optional[str] = None
+
 
 class BindingRequest(BaseModel):
     source_device_id: str
     target_device_id: str
     cluster_id: int
 
+
 class OTAUpdateRequest(BaseModel):
     device_id: str
+
 
 class AnalyticsRequest(BaseModel):
     start_time: Optional[int] = None
     end_time: Optional[int] = None
     event_types: Optional[List[str]] = None
+
 
 class LogsRequest(BaseModel):
     start_time: Optional[int] = None
@@ -103,6 +112,8 @@ class LogsRequest(BaseModel):
     limit: Optional[int] = 100
 
 # Helper functions
+
+
 async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)):
     if token is None:
         # Allow anonymous access
@@ -117,6 +128,7 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)):
         # If token is invalid, still allow access as anonymous
         return {"client_id": "anonymous"}
 
+
 async def broadcast_to_websockets(channel: str, data: Dict[str, Any]):
     """Broadcast data to all connected WebSockets for a channel."""
     for ws in ws_connections.get(channel, []):
@@ -126,6 +138,8 @@ async def broadcast_to_websockets(channel: str, data: Dict[str, Any]):
             logger.error(f"Failed to send WebSocket message: {e}")
 
 # Routes
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     return """
@@ -255,12 +269,14 @@ async def root():
     </html>
     """
 
+
 @app.post("/api/token", response_model=TokenResponse)
 async def create_token(request: TokenRequest):
     try:
         # Create a new token
         try:
-            expires_at = datetime.now(tz=datetime.timezone.utc) + timedelta(days=TOKEN_LIFETIME_DAYS)
+            expires_at = datetime.now(
+                tz=datetime.timezone.utc) + timedelta(days=TOKEN_LIFETIME_DAYS)
         except:
             # Fallback if timezone is not available
             expires_at = datetime.now() + timedelta(days=TOKEN_LIFETIME_DAYS)
@@ -283,7 +299,8 @@ async def create_token(request: TokenRequest):
             expires_timestamp = int(expires_at.timestamp())
         except:
             # Fallback if timestamp() is not available
-            expires_timestamp = int((expires_at - datetime(1970, 1, 1)).total_seconds())
+            expires_timestamp = int(
+                (expires_at - datetime(1970, 1, 1)).total_seconds())
 
         return {
             "access_token": access_token,
@@ -299,6 +316,7 @@ async def create_token(request: TokenRequest):
             "expires_at": int((datetime.now() + timedelta(days=1)).timestamp())
         }
 
+
 @app.post("/api/commission")
 async def commission_device(request: CommissionRequest, user: Dict = Depends(get_current_user)):
     try:
@@ -312,6 +330,7 @@ async def commission_device(request: CommissionRequest, user: Dict = Depends(get
         logger.error(f"Failed to commission device: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/devices")
 async def get_devices(user: Dict = Depends(get_current_user)):
     try:
@@ -321,12 +340,14 @@ async def get_devices(user: Dict = Depends(get_current_user)):
         logger.error(f"Failed to get devices: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.delete("/api/devices/{device_id}")
 async def remove_device(device_id: str, user: Dict = Depends(get_current_user)):
     try:
         success = await controller.remove_device(device_id)
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to remove device")
+            raise HTTPException(
+                status_code=500, detail="Failed to remove device")
 
         # Broadcast to WebSocket clients
         await broadcast_to_websockets("devices", {"event": "device_removed", "device_id": device_id})
@@ -335,23 +356,77 @@ async def remove_device(device_id: str, user: Dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Failed to remove device: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    
-def run_chiptool_command(command: str) -> str:
+
+
+async def run_chiptool_command_via_server(endpoint: str, payload: dict) -> dict:
+    """Run chip-tool command via the chip-tool server addon."""
     try:
-        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(status_code=500, detail=f"Error: {e.stderr.strip()}")
+        chip_tool_url = os.environ.get(
+            "CHIP_TOOL_SERVER_URL", "http://localhost:5000")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{chip_tool_url}/{endpoint}",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=60)
+            ) as response:
+                response_data = await response.json()
+
+                if response.status != 200:
+                    error_message = response_data.get(
+                        "error", f"HTTP {response.status}")
+                    raise HTTPException(
+                        status_code=500, detail=f"Chip-tool server error: {error_message}")
+
+                if response_data.get("status") != "success":
+                    error_message = response_data.get(
+                        "error", "Unknown error from chip-tool")
+                    stderr_output = response_data.get("stderr", "")
+                    detail = f"Chip-tool command failed: {error_message}"
+                    if stderr_output:
+                        detail += f" (stderr: {stderr_output})"
+                    raise HTTPException(status_code=500, detail=detail)
+
+                return response_data
+
+    except aiohttp.ClientError as e:
+        raise HTTPException(
+            status_code=500, detail=f"Network error connecting to chip-tool server: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
 class PairRequest(BaseModel):
     node_id: int
     code: str
 
-@app.post("/pair")
-def pair_device(request: PairRequest):
-    cmd = f"chip-tool pairing code {request.node_id} {request.code}"
-    output = run_chiptool_command(cmd)
-    return {"message": "Pairing command executed", "output": output}
 
+@app.post("/pair")
+async def pair_device(request: PairRequest):
+    """Commission a device using the chip-tool server addon."""
+    try:
+        # Use the commission endpoint from chip-tool server
+        payload = {
+            "nodeId": request.node_id,
+            "setupPayload": request.code
+        }
+
+        result = await run_chiptool_command_via_server("commission", payload)
+
+        return {
+            "message": "Device commissioned successfully",
+            "output": result.get("output", ""),
+            "command": result.get("command", ""),
+            "node_id": request.node_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to pair device: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to pair device: {e}")
 
 
 @app.post("/api/binding")
@@ -363,22 +438,26 @@ async def create_binding(request: BindingRequest, user: Dict = Depends(get_curre
             request.cluster_id
         )
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to create binding")
+            raise HTTPException(
+                status_code=500, detail="Failed to create binding")
         return {"success": True}
     except Exception as e:
         logger.error(f"Failed to create binding: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/ota/update")
 async def trigger_ota_update(request: OTAUpdateRequest, user: Dict = Depends(get_current_user)):
     try:
         success = await controller.trigger_ota_update(request.device_id)
         if not success:
-            raise HTTPException(status_code=500, detail="Failed to trigger OTA update")
+            raise HTTPException(
+                status_code=500, detail="Failed to trigger OTA update")
         return {"success": True}
     except Exception as e:
         logger.error(f"Failed to trigger OTA update: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/analytics")
 async def get_analytics(request: AnalyticsRequest, user: Dict = Depends(get_current_user)):
@@ -392,6 +471,7 @@ async def get_analytics(request: AnalyticsRequest, user: Dict = Depends(get_curr
     except Exception as e:
         logger.error(f"Failed to get analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/logs")
 async def get_logs(request: LogsRequest, user: Dict = Depends(get_current_user)):
@@ -407,6 +487,7 @@ async def get_logs(request: LogsRequest, user: Dict = Depends(get_current_user))
         logger.error(f"Failed to get logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/hub")
 async def get_hub_info(user: Dict = Depends(get_current_user)):
     try:
@@ -417,6 +498,8 @@ async def get_hub_info(user: Dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # WebSocket endpoints
+
+
 @app.websocket("/ws/devices")
 async def websocket_devices(websocket: WebSocket):
     await websocket.accept()
@@ -437,6 +520,7 @@ async def websocket_devices(websocket: WebSocket):
         if websocket in ws_connections["devices"]:
             ws_connections["devices"].remove(websocket)
 
+
 @app.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
@@ -456,6 +540,7 @@ async def websocket_logs(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         if websocket in ws_connections["logs"]:
             ws_connections["logs"].remove(websocket)
+
 
 @app.websocket("/ws/analytics")
 async def websocket_analytics(websocket: WebSocket):

@@ -31,6 +31,7 @@ options:
   max_log_entries: 1000
   max_analytics_events: 1000
   auto_register_with_ha: true
+  chip_tool_server_url: "http://localhost:5000"
 schema:
   log_level: list(trace|debug|info|notice|warning|error|fatal)
   token_lifetime_days: int(1,365)
@@ -39,6 +40,7 @@ schema:
   max_log_entries: int(100,10000)
   max_analytics_events: int(100,10000)
   auto_register_with_ha: bool
+  chip_tool_server_url: str
 webui: "http://[HOST]:[PORT:8099]"
 ingress: true
 ingress_port: 8099
