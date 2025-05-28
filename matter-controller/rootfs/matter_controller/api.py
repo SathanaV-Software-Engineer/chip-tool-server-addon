@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import jwt as jwt
-
+import subprocess
 # Import the controller directly instead of using relative import
 import sys
 import os
@@ -335,6 +335,24 @@ async def remove_device(device_id: str, user: Dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Failed to remove device: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+def run_chiptool_command(command: str) -> str:
+    try:
+        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e.stderr.strip()}")
+class PairRequest(BaseModel):
+    node_id: int
+    code: str
+
+@app.post("/pair")
+def pair_device(request: PairRequest):
+    cmd = f"chip-tool pairing code {request.node_id} {request.code}"
+    output = run_chiptool_command(cmd)
+    return {"message": "Pairing command executed", "output": output}
+
+
 
 @app.post("/api/binding")
 async def create_binding(request: BindingRequest, user: Dict = Depends(get_current_user)):

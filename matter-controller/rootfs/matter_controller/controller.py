@@ -385,12 +385,12 @@ class MatterController:
             return True
 
     async def create_binding(self, source_device_id: str, target_device_id: str, cluster_id: int) -> bool:
-        """Create a binding between two devices.
+        """Create a binding between two devices using the chip-tool server addon.
 
         Args:
-            source_device_id: The ID of the source device
-            target_device_id: The ID of the target device
-            cluster_id: The cluster ID to bind
+            source_device_id: The ID of the source device (switch/controller)
+            target_device_id: The ID of the target device (light/target)
+            cluster_id: The cluster ID to bind (default: 6 for On/Off)
 
         Returns:
             True if the binding was created, False otherwise
@@ -408,40 +408,77 @@ class MatterController:
             return False
 
         try:
-            # Use the Matter Server WebSocket API to create a binding
+            # Use the chip-tool server addon HTTP API to create a binding
+            chip_tool_url = os.environ.get("CHIP_TOOL_SERVER_URL", "http://localhost:5000")
+
             async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(self.matter_server_url) as ws:
-                    # Send create binding request
-                    await ws.send_json({
-                        "message_id": str(uuid.uuid4()),
-                        "command": "create_binding",
-                        "args": {
-                            "node_id": source_device_id,
-                            "target_node_id": target_device_id,
-                            "cluster_id": cluster_id
-                        }
-                    })
+                # Prepare the binding request payload
+                payload = {
+                    "switchNode": int(source_device_id),
+                    "lightNode": int(target_device_id),
+                    "endpoint": 1,  # Default endpoint
+                    "cluster": cluster_id
+                }
 
-                    # Wait for response
-                    response = await ws.receive_json()
+                logger.debug(f"Sending binding request to {chip_tool_url}/bind with payload: {payload}")
 
-                    if response.get("status") != "succeeded":
-                        error_message = response.get("error", {}).get("message", "Unknown error")
+                # Send HTTP POST request to the chip-tool server addon
+                async with session.post(
+                    f"{chip_tool_url}/bind",
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=60)  # 60 second timeout for chip-tool commands
+                ) as response:
+
+                    response_data = await response.json()
+
+                    if response.status != 200:
+                        error_message = response_data.get("error", f"HTTP {response.status}")
                         logger.error(f"Failed to create binding: {error_message}")
+                        self._add_log_entry("error", f"Binding failed: {error_message}")
                         return False
+
+                    if response_data.get("status") != "success":
+                        error_message = response_data.get("error", "Unknown error from chip-tool")
+                        stderr_output = response_data.get("stderr", "")
+                        logger.error(f"Chip-tool binding failed: {error_message}")
+                        if stderr_output:
+                            logger.error(f"Chip-tool stderr: {stderr_output}")
+                        self._add_log_entry("error", f"Chip-tool binding failed: {error_message}")
+                        return False
+
+                    # Log successful binding
+                    command_output = response_data.get("output", "")
+                    executed_command = response_data.get("command", "")
+                    logger.info(f"Binding created successfully")
+                    logger.debug(f"Executed command: {executed_command}")
+                    if command_output:
+                        logger.debug(f"Command output: {command_output}")
 
             # Add an analytics event
             self._add_analytics_event("binding_created", {
                 "source_device_id": source_device_id,
                 "target_device_id": target_device_id,
-                "cluster_id": cluster_id
+                "cluster_id": cluster_id,
+                "method": "chip_tool_server_addon"
             })
+
+            # Log successful binding creation
+            self._add_log_entry("binding", f"Successfully created binding: {source_device_id} -> {target_device_id} (cluster {cluster_id})")
 
             return True
 
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error while creating binding: {e}")
+            self._add_log_entry("error", f"Network error during binding: {e}")
+            return False
+        except asyncio.TimeoutError:
+            logger.error("Timeout while creating binding - chip-tool command took too long")
+            self._add_log_entry("error", "Binding timeout - chip-tool command took too long")
+            return False
         except Exception as e:
-            logger.error(f"Failed to create binding: {e}")
-            self._add_log_entry("error", f"Failed to create binding: {e}")
+            logger.error(f"Unexpected error while creating binding: {e}")
+            self._add_log_entry("error", f"Unexpected binding error: {e}")
             return False
 
     async def trigger_ota_update(self, device_id: str) -> bool:
